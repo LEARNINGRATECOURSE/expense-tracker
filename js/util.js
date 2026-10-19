@@ -4,15 +4,17 @@ export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ESC[c]);
 
-const inr = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
+const inr0 = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 });
+const inr2 = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 export const money = (n, { sign = false } = {}) => {
   const v = Math.round((Number(n) || 0) * 100) / 100;
-  return (v < 0 ? '-' : sign && v > 0 ? '+' : '') + '₹' + inr.format(Math.abs(v));
+  const body = Number.isInteger(v) ? inr0.format(Math.abs(v)) : inr2.format(Math.abs(v));
+  return (v < 0 ? '-' : sign && v > 0 ? '+' : '') + '₹' + body;
 };
 /** Compact form for tight spaces: ₹1.2L, ₹45K */
 export const moneyShort = (n) => {
   const a = Math.abs(n), s = n < 0 ? '-' : '';
-  if (a >= 1e7) return `${s}₹${+(a / 1e7).toFixed(2)}Cr`;
+  if (a >= 1e7) return `${s}₹${inr0.format(+(a / 1e7).toFixed(2))}Cr`;
   if (a >= 1e5) return `${s}₹${+(a / 1e5).toFixed(2)}L`;
   if (a >= 1e4) return `${s}₹${+(a / 1e3).toFixed(1)}K`;
   return money(n);
@@ -44,17 +46,30 @@ export const uid = () =>
 
 export const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
-export function download(filename, text, type) {
+const isIOSStandalone = () =>
+  (/iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) &&
+  (navigator.standalone || matchMedia('(display-mode: standalone)').matches);
+
+/** Saves a text file. iOS home-screen apps can't follow blob downloads, so they get the share sheet. */
+export async function download(filename, text, type) {
+  if (isIOSStandalone() && navigator.canShare) {
+    const file = new File([text], filename, { type: type.split(';')[0] });
+    if (navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: filename }); return; } catch (e) { if (e.name === 'AbortError') return; }
+    }
+  }
   const url = URL.createObjectURL(new Blob([text], { type }));
   const a = Object.assign(document.createElement('a'), { href: url, download: filename });
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-let toastTimer;
+let toastTimer, storageBad = false;
+export const setStorageBad = (v) => { storageBad = v; };
+/** While storage is failing every message becomes the warning, so "Added ✓" can't hide that data isn't being kept. */
 export function toast(msg) {
   const el = $('#toast');
-  el.textContent = msg; el.classList.add('show');
+  el.textContent = storageBad ? '⚠️ Not saved: storage is full or blocked. Export a backup now.' : msg; el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
 }

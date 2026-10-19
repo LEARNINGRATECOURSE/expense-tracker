@@ -18,9 +18,9 @@ const monthNav = () => `<div class="month-nav">
   <strong>${monthLabel(ui.month)}</strong>
   <button class="icon-btn sm" data-act="month" data-d="1" aria-label="Next month" ${ui.month >= curMonth() ? 'disabled style="opacity:.4"' : ''}>›</button></div>`;
 
-const progress = (pct, cls = '') => {
+const progress = (pct, cls = '', label = 'Progress') => {
   const c = pct >= 100 ? 'over' : pct >= 80 ? 'warn' : '';
-  return `<div class="track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.min(100, Math.round(pct))}"><div class="fill ${cls || c}" style="width:${Math.max(0, Math.min(100, pct))}%"></div></div>`;
+  return `<div class="track" role="progressbar" aria-label="${esc(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.min(100, Math.floor(pct))}"><div class="fill ${cls || c}" style="width:${Math.max(0, Math.min(100, pct))}%"></div></div>`;
 };
 
 export function txRow(t) {
@@ -31,7 +31,7 @@ export function txRow(t) {
   const meta = t.type === 'transfer' ? `${esc(a?.name || '?')} → ${esc(to?.name || '?')}` : `${c ? esc(c.name) : TX_TYPES[t.type]} · ${esc(a?.name || '?')}`;
   const sign = t.type === 'transfer' ? '' : isIn ? '+' : '-';
   return `<button class="item" data-act="edit-tx" data-id="${t.id}">
-    <span class="well sm" aria-hidden="true">${t.type === 'transfer' ? '↔️' : c?.icon || '🧾'}</span>
+    <span class="well sm" aria-hidden="true">${t.type === 'transfer' ? '↔️' : esc(c?.icon || '🧾')}</span>
     <span class="grow"><span class="title" style="display:block">${esc(title)}</span><span class="meta" style="display:block">${meta} · ${fmtDate(t.date)}</span></span>
     <span class="amt ${isIn ? 'pos' : ''}">${sign}${money(t.amount)}</span></button>`;
 }
@@ -41,7 +41,7 @@ const sortedTx = (arr) => [...arr].sort((a, b) => b.date.localeCompare(a.date) |
 const billRow = (r, withAction) => {
   const st = recStatus(r), c = category(r.categoryId);
   return `<div class="item" style="cursor:default">
-    <button class="well sm" style="border:0;cursor:pointer" data-act="edit-rec" data-id="${r.id}" aria-label="Edit ${esc(r.name)}">${c?.icon || '🧾'}</button>
+    <button class="well sm" style="border:0;cursor:pointer" data-act="edit-rec" data-id="${r.id}" aria-label="Edit ${esc(r.name)}">${esc(c?.icon || '🧾')}</button>
     <span class="grow"><span class="title" style="display:block">${esc(r.name)}</span>
       <span class="meta" style="display:block"><span class="${st.key === 'overdue' ? 'neg' : ''}" style="${st.key === 'overdue' ? 'font-weight:700' : ''}">${st.label}</span> · ${fmtDate(r.nextDue)}</span></span>
     <span style="text-align:right"><span class="amt ${r.type === 'income' ? 'pos' : ''}" style="display:block">${r.type === 'income' ? '+' : ''}${money(r.amount)}</span>
@@ -57,17 +57,20 @@ export function home() {
   const recs = [...s.recurring].filter((r) => r.active !== false).sort((a, b) => a.nextDue.localeCompare(b.nextDue)).slice(0, 3);
   const recent = sortedTx(s.transactions).slice(0, 5);
   const delta = prev.expense > 0 ? ((st.expense - prev.expense) / prev.expense) * 100 : null;
+  const dRound = delta === null ? 0 : Math.round(delta);
+  const lastBackup = s.settings.lastBackup;
+  const needsBackup = s.transactions.length >= 10 && (!lastBackup || (Date.now() - new Date(lastBackup + 'T00:00:00')) / 864e5 > 30);
 
   let budgetCard;
   if (bs.overall.limit > 0) {
     const pending = pendingBillsThisMonth();
     const free = bs.overall.limit - bs.overall.spent - pending;
     budgetCard = `<a class="card tap stack" href="#/budgets" style="display:flex;gap:14px">
-      <div class="between row"><h3>Monthly budget</h3><span class="pill ${bs.overall.pct >= 100 ? 'warn' : ''}">${Math.round(bs.overall.pct)}% used</span></div>
-      ${progress(bs.overall.pct)}
+      <div class="between row"><h3>Monthly budget</h3><span class="pill ${bs.overall.pct >= 100 ? 'warn' : ''}">${Math.floor(bs.overall.pct)}% used</span></div>
+      ${progress(bs.overall.pct, '', 'Monthly budget used')}
       <div class="between row small"><span class="muted">${money(bs.overall.spent)} of ${money(bs.overall.limit)}</span>
-        <span class="${free < 0 ? 'neg' : ''}" style="font-weight:700">${free < 0 ? `${money(-free)} over` : `${money(free)} left`}</span></div>
-      <p class="small muted">${free > 0 ? `≈ <b style="color:var(--fg)">${money(free / daysLeft)}/day</b> safe to spend for the next ${daysLeft} day${daysLeft > 1 ? 's' : ''}${pending ? `, after ${money(pending)} of bills due` : ''}.` : 'You have used up this month’s budget plan.'}</p></a>`;
+        <span class="${free < 0 ? 'neg' : ''}" style="font-weight:700">${bs.overall.spent > bs.overall.limit ? `${money(bs.overall.spent - bs.overall.limit)} over` : free < 0 ? `${money(-free)} short after bills` : `${money(free)} left`}</span></div>
+      <p class="small muted">${free > 0 ? `≈ <b style="color:var(--fg)">${money(free / daysLeft)}/day</b> safe to spend for the next ${daysLeft} day${daysLeft > 1 ? 's' : ''}${pending ? `, after ${money(pending)} of bills due` : ''}.` : bs.overall.spent > bs.overall.limit ? 'You have used up this month’s budget.' : `${money(pending)} of bills are still due this month, which is more than the ${money(bs.overall.limit - bs.overall.spent)} left in your budget.`}</p></a>`;
   } else {
     budgetCard = `<a class="card tap row" href="#/budgets"><span class="well">🎯</span><span class="grow"><h3>Set a monthly budget</h3><p class="small muted">Know how much you can safely spend each day.</p></span><span aria-hidden="true">›</span></a>`;
   }
@@ -81,17 +84,19 @@ export function home() {
     <div class="stats">
       <div class="stat"><b class="pos num">${moneyShort(st.income)}</b><span>Income</span></div>
       <div class="stat"><b class="num">${moneyShort(st.expense)}</b><span>Spent</span></div>
-      <div class="stat"><b class="num ${st.savings < 0 ? 'neg' : ''}">${moneyShort(st.savings)}</b><span>${st.rate === null ? 'Saved' : `Saved · ${Math.round(st.rate)}%`}</span></div>
+      <div class="stat"><b class="num ${st.savings < 0 ? 'neg' : ''}">${moneyShort(st.savings)}</b><span>${st.rate === null ? 'Saved' : `${Math.round(st.rate)}% saved`}</span></div>
     </div>
-    ${delta === null ? '' : `<p class="small muted" style="margin-top:16px">Spent ${money(st.expense)} so far. Last month’s total was ${money(prev.expense)} (<b class="${delta > 0 ? 'neg' : 'pos'}">${delta > 0 ? '+' : '−'}${Math.abs(Math.round(delta))}%</b> now vs. then).</p>`}
+    <div class="row" style="margin-top:18px"><button class="btn grow" data-act="add-tx" data-type="income">＋ Income</button><button class="btn grow" data-act="add-tx" data-type="expense">－ Expense</button></div>
+    ${delta === null ? '' : `<p class="small muted" style="margin-top:16px">Spent ${money(st.expense)} so far. Last month’s total was ${money(prev.expense)} (${dRound === 0 ? 'about the same pace' : `<b class="${dRound > 0 ? 'neg' : 'pos'}">${dRound > 0 ? '+' : '−'}${Math.abs(dRound)}%</b> so far vs. that total`}).</p>`}
   </section>
-  ${hot.length ? `<div class="stack">${hot.slice(0, 2).map((r) => { const c = category(r.id); return `<a class="banner" href="#/budgets"><span aria-hidden="true">${r.pct >= 100 ? '🚨' : '⚠️'}</span><span><b>${esc(c?.name)}</b> is at ${Math.round(r.pct)}% of ${money(r.limit)}</span></a>`; }).join('')}</div>` : ''}
+  ${needsBackup ? `<a class="banner" href="#/settings"><span aria-hidden="true">💾</span><span><b>Back up your data.</b> ${lastBackup ? `Last backup was on ${fmtDate(lastBackup)}.` : 'You haven’t made a backup yet.'} Everything lives only on this phone.</span></a>` : ''}
+  ${hot.length ? `<div class="stack">${hot.slice(0, 2).map((r) => { const c = category(r.id); return `<a class="banner" href="#/budgets"><span aria-hidden="true">${r.pct >= 100 ? '🚨' : '⚠️'}</span><span><b>${esc(c?.name)}</b> is at ${Math.floor(r.pct)}% of ${money(r.limit)}</span></a>`; }).join('')}</div>` : ''}
   ${budgetCard}
   ${recs.length ? `<section class="stack"><div class="section-head"><h2>Coming up</h2><a href="#/bills">All</a></div><div class="list">${recs.map((r) => billRow(r, false)).join('')}</div></section>` : ''}
   <section class="stack"><div class="section-head"><h2>Accounts</h2><a href="#/accounts">Manage</a></div>
     <div class="hscroll">${s.accounts.map((a) => { const b = balance(a), li = isLiability(a); return `<button class="mini-acc" data-act="edit-acc" data-id="${a.id}"><span class="well sm">${ACCOUNT_TYPES[a.type].icon}</span><b class="num ${li && b < 0 ? 'neg' : ''}">${money(li ? -b : b)}</b><span class="small muted">${esc(a.name)}${li ? ' · owed' : ''}</span></button>`; }).join('')}</div></section>
   <section class="stack"><div class="section-head"><h2>Recent</h2><a href="#/activity">See all</a></div>
-    ${recent.length ? `<div class="list">${recent.map(txRow).join('')}</div>` : empty('✨', 'Nothing yet', 'Tap the + button to add your first expense. It takes a few seconds.')}</section>`;
+    ${recent.length ? `<div class="list">${recent.map(txRow).join('')}</div>` : empty('✨', 'Nothing yet', 'Add your salary or another income first, then log expenses with the + button. It takes a few seconds.', '<button class="btn primary" data-act="add-tx" data-type="income">＋ Add income</button>')}</section>`;
 }
 
 /* ---------- Activity ---------- */
@@ -135,17 +140,17 @@ export function budgets() {
   return `<header class="page-head"><div><p class="sub">${monthLabel(k)}</p><h1>Budgets</h1></div></header>
   <button class="card tap stack" data-act="budget" data-id="overall" style="text-align:left;border:0;display:flex">
     <div class="between row"><h3>Overall</h3><span class="link" style="padding:0;min-height:0">${o.limit ? 'Edit' : 'Set limit'}</span></div>
-    ${o.limit ? `${progress(o.pct)}<div class="between row small"><span class="muted">${money(o.spent)} spent</span><b class="${o.spent > o.limit ? 'neg' : ''}">${o.limit - o.spent >= 0 ? `${money(o.limit - o.spent)} left` : `${money(o.spent - o.limit)} over`}</b></div>`
+    ${o.limit ? `${progress(o.pct, '', 'Overall budget used')}<div class="between row small"><span class="muted">${money(o.spent)} spent</span><b class="${o.spent > o.limit ? 'neg' : ''}">${o.limit - o.spent >= 0 ? `${money(o.limit - o.spent)} left` : `${money(o.spent - o.limit)} over`}</b></div>`
       : '<p class="small muted">Set a total monthly limit to see what’s left to spend. Alerts fire at 50%, 80% and 100%.</p>'}
   </button>
-  ${alerts.length ? `<div class="stack">${alerts.slice(0, 4).map((a) => `<div class="banner"><span aria-hidden="true">${a.pct >= 100 ? '🚨' : a.pct >= 80 ? '⚠️' : 'ℹ️'}</span><span><b>${esc(a.name)}</b> crossed ${step(a.pct)} (${Math.round(a.pct)}%)</span></div>`).join('')}</div>` : ''}
+  ${alerts.length ? `<div class="stack">${alerts.slice(0, 4).map((a) => `<div class="banner"><span aria-hidden="true">${a.pct >= 100 ? '🚨' : a.pct >= 80 ? '⚠️' : 'ℹ️'}</span><span><b>${esc(a.name)}</b> crossed ${step(a.pct)} (${Math.floor(a.pct)}%)</span></div>`).join('')}</div>` : ''}
   <section class="stack"><div class="section-head"><h2>By category</h2></div>
     ${withLimit.length ? `<div class="list">${withLimit.map((c) => { const lim = s.budgets.cats[c.id], sp = spend[c.id] || 0, pct = (sp / lim) * 100;
       return `<button class="item" data-act="budget" data-id="${c.id}" style="flex-direction:column;align-items:stretch;gap:10px">
-        <span class="row"><span class="well sm">${c.icon}</span><span class="grow"><span class="title" style="display:block">${esc(c.name)}</span><span class="meta" style="display:block">${money(sp)} of ${money(lim)}</span></span><span class="amt ${pct >= 100 ? 'neg' : ''}">${Math.round(pct)}%</span></span>${progress(pct)}</button>`; }).join('')}</div>`
+        <span class="row"><span class="well sm">${esc(c.icon)}</span><span class="grow"><span class="title" style="display:block">${esc(c.name)}</span><span class="meta" style="display:block">${money(sp)} of ${money(lim)}</span></span><span class="amt ${pct >= 100 ? 'neg' : ''}">${Math.floor(pct)}%</span></span>${progress(pct, '', `${c.name} budget used`)}</button>`; }).join('')}</div>`
       : empty('📊', 'No category limits', 'Pick a category below to cap what you spend on it each month.')}
   </section>
-  ${without.length ? `<section class="stack"><div class="section-head"><h2>Add a limit</h2></div><div class="chips">${without.map((c) => `<button class="btn sm" data-act="budget" data-id="${c.id}">${c.icon} ${esc(c.name)}</button>`).join('')}</div></section>` : ''}`;
+  ${without.length ? `<section class="stack"><div class="section-head"><h2>Add a limit</h2></div><div class="chips">${without.map((c) => `<button class="btn sm" data-act="budget" data-id="${c.id}">${esc(c.icon)} ${esc(c.name)}</button>`).join('')}</div></section>` : ''}`;
 }
 
 /* ---------- Accounts ---------- */
@@ -193,8 +198,8 @@ function barChart(months) {
     <line x1="5" x2="${W - 5}" y1="${H - pad}" y2="${H - pad}" stroke="rgb(163 177 198 / .7)" stroke-width="2" stroke-linecap="round"/>
     ${months.map((m, i) => {
       const cx = 5 + gw * i + gw / 2, h1 = hh(m.income), h2 = hh(m.expense);
-      return `<rect x="${cx - bw - 2}" y="${H - pad - h1}" width="${bw}" height="${h1}" rx="${Math.min(6, bw / 2)}" fill="#38B2AC"/>
-        <rect x="${cx + 2}" y="${H - pad - h2}" width="${bw}" height="${h2}" rx="${Math.min(6, bw / 2)}" fill="#6C63FF"/>
+      return `<rect x="${cx - bw - 2}" y="${H - pad - h1}" width="${bw}" height="${h1}" rx="${Math.min(6, bw / 2)}" fill="#1F8A84"/>
+        <rect x="${cx + 2}" y="${H - pad - h2}" width="${bw}" height="${h2}" rx="${Math.min(6, bw / 2)}" fill="#5148D8"/>
         <text x="${cx}" y="${H - 5}" text-anchor="middle" font-size="11" font-weight="500" fill="#6B7280">${monthShort(m.k)}</text>`;
     }).join('')}</svg>`;
 }
@@ -223,10 +228,10 @@ export function reports() {
   return `<header class="page-head"><div class="row"><a class="icon-btn sm" href="#/more" aria-label="Back">‹</a><h1>Reports</h1></div></header>
   ${monthNav()}
   <section class="card stack"><div class="between row"><h3>Income vs expenses</h3></div>${barChart(months)}
-    <div class="legend"><span><i style="background:#38B2AC"></i>Income</span><span><i style="background:#6C63FF"></i>Expenses</span></div></section>
+    <div class="legend"><span><i style="background:#1F8A84"></i>Income</span><span><i style="background:#5148D8"></i>Expenses</span></div></section>
   <section class="card stack"><h3>Insights</h3>${insights.length ? `<ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:10px">${insights.map((i) => `<li>${i}</li>`).join('')}</ul>` : '<p class="muted small">Add a few transactions to see insights here.</p>'}</section>
   <section class="card stack"><div class="between row"><h3>Where it went</h3><span class="num" style="font-weight:700">${money(total)}</span></div>
-    ${rows.length ? rows.map(([id, v]) => { const c = category(id); const pct = (v / total) * 100; return `<div class="stack" style="gap:8px"><div class="between row small"><span>${c?.icon || ''} ${esc(c?.name || 'Unknown')}</span><span class="num"><b>${money(v)}</b> <span class="muted">· ${Math.round(pct)}%</span></span></div>${progress(pct, 'plain')}</div>`; }).join('') : '<p class="muted small">No spending recorded this month.</p>'}</section>
+    ${rows.length ? rows.map(([id, v]) => { const c = category(id); const pct = (v / total) * 100; return `<div class="stack" style="gap:8px"><div class="between row small"><span>${c?.icon || ''} ${esc(c?.name || 'Unknown')}</span><span class="num"><b>${money(v)}</b> <span class="muted">· ${Math.round(pct)}%</span></span></div>${progress(pct, 'plain', c?.name || 'Category share')}</div>`; }).join('') : '<p class="muted small">No spending recorded this month.</p>'}</section>
   ${total > 0 ? `<section class="card stack"><h3>Essential vs discretionary</h3>
     <div class="stack" style="gap:8px"><div class="between row small"><span>Essential</span><b class="num">${money(ess)} · ${Math.round((ess / total) * 100)}%</b></div>${progress((ess / total) * 100, 'teal')}</div>
     <div class="stack" style="gap:8px"><div class="between row small"><span>Discretionary</span><b class="num">${money(disc)} · ${Math.round((disc / total) * 100)}%</b></div>${progress((disc / total) * 100)}</div></section>` : ''}
@@ -251,8 +256,8 @@ const standalone = () => matchMedia('(display-mode: standalone)').matches || nav
 function installCard() {
   if (standalone()) return '';
   if (ui.installPrompt) return `<div class="card install-card"><span class="well">📲</span><span class="grow"><h3>Install Kharcha</h3><p class="small muted">Works offline, opens full-screen.</p></span><button class="btn primary sm" data-act="install">Install</button></div>`;
-  if (isIOS()) return `<div class="card install-card"><span class="well">📲</span><span class="grow"><h3>Add to Home Screen</h3><p class="small muted">In Safari tap <b>Share</b> <span aria-hidden="true">⎋</span>, then <b>Add to Home Screen</b>.</p></span></div>`;
-  return `<div class="card install-card"><span class="well">📲</span><span class="grow"><h3>Install on Android</h3><p class="small muted">Open the browser menu <b>⋮</b> and choose <b>Install app</b>.</p></span></div>`;
+  if (isIOS()) return `<div class="card install-card"><span class="well">📲</span><span class="grow"><h3>Add to Home Screen</h3><p class="small muted">In Safari tap the <b>Share</b> button (the square with an arrow pointing up), then <b>Add to Home Screen</b>. Install <b>before</b> adding data: the home-screen app keeps its own storage.</p></span></div>`;
+  return `<div class="card install-card"><span class="well">📲</span><span class="grow"><h3>Install the app</h3><p class="small muted">On Android open the browser menu <b>⋮</b> and choose <b>Install app</b>. On a computer use the install icon in the address bar.</p></span></div>`;
 }
 
 export function settings() {
@@ -262,11 +267,11 @@ export function settings() {
   <section class="stack"><div class="section-head"><h2>Privacy</h2></div><div class="list">
     ${lockAvailable() ? set('lock-set', '🔒', locked ? 'Change PIN' : 'Set app lock', locked ? 'App asks for your PIN on open' : 'Ask for a 4-digit PIN when the app opens') : '<p class="small muted">App lock needs a secure (https) connection.</p>'}
     ${locked ? set('lock-off', '🔓', 'Turn off app lock', 'Remove the PIN') : ''}
-  </div><p class="small muted" style="padding:0 4px">All data stays on this device. Nothing is sent to a server. The PIN hides the app; it does not encrypt the stored data.</p></section>
+  </div><p class="small muted" style="padding:0 4px">All data stays on this device. Nothing is sent to a server. The PIN is a casual lock that hides the app; it does not encrypt the stored data.</p></section>
   <section class="stack"><div class="section-head"><h2>Data</h2></div><div class="list">
     ${set('categories', '🏷️', 'Categories', 'Add or edit categories')}
     ${set('export-csv', '📄', 'Export CSV', 'All transactions, opens in Excel / Sheets')}
-    ${set('backup', '💾', 'Back up data', 'Download a full JSON backup')}
+    ${set('backup', '💾', 'Back up data', get().settings.lastBackup ? `Last backup: ${fmtDate(get().settings.lastBackup)}` : 'Download a full JSON backup. Do this regularly.')}
     ${set('restore', '♻️', 'Restore backup', 'Replace current data from a backup file')}
     ${set('clear', '🗑️', 'Clear all data', 'Delete everything on this device', '')}
   </div><input type="file" id="restore-file" accept="application/json,.json" hidden></section>

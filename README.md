@@ -20,3 +20,11 @@ recurring bills / EMIs / salary with paid / due / overdue status, reports (6-mon
 insights, top payees), CSV export, JSON backup / restore, PIN app lock.
 
 Accounting rule: card payments and EMIs are **transfers** to a liability account, so they are never double-counted as spending.
+
+## Deploy (GitHub Pages)
+Settings → Pages → Source: **GitHub Actions**, then merge to `main` (or run the workflow manually from an allowed branch).
+The workflow stamps a fresh service-worker cache name on every deploy so installed apps update themselves.
+
+## Adding income
+Home → **＋ Income**, or the **+** button → *Income* tab, or type `salary 85000` in Quick add.
+Recurring salary: More → Bills & EMIs → *Income* → **Received** each month.
