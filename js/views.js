@@ -1,9 +1,10 @@
 import { esc, money, moneyShort, todayISO, ym, monthLabel, monthShort, shiftMonth, daysInMonth, fmtDate, dayLabel } from './util.js';
 import {
   get, acct, category, balance, totals, monthStats, monthTx, categorySpend, budgetStatus, recStatus, pendingBillsThisMonth,
-  ACCOUNT_TYPES, TX_TYPES, isLiability,
+  ACCOUNT_TYPES, TX_TYPES, isLiability, duePeriods, billsDueSoon, goalSaved, goalMonthly,
 } from './store.js';
 import { isLockSet, lockAvailable } from './lock.js';
+import { reminderStatus } from './reminders.js';
 
 /** Shared UI state that survives re-renders. */
 export const ui = { month: ym(todayISO()), q: '', type: 'all', installPrompt: null };
@@ -45,7 +46,8 @@ const billRow = (r, withAction) => {
     <span class="grow"><span class="title" style="display:block">${esc(r.name)}</span>
       <span class="meta" style="display:block"><span class="${st.key === 'overdue' ? 'neg' : ''}" style="${st.key === 'overdue' ? 'font-weight:700' : ''}">${st.label}</span> · ${fmtDate(r.nextDue)}</span></span>
     <span style="text-align:right"><span class="amt ${r.type === 'income' ? 'pos' : ''}" style="display:block">${r.type === 'income' ? '+' : ''}${money(r.amount)}</span>
-      ${withAction ? `<button class="link" data-act="pay" data-id="${r.id}" style="padding:0;min-height:44px">${r.type === 'income' ? 'Received' : 'Mark paid'}</button>` : ''}</span></div>`;
+      ${withAction ? `<button class="link" data-act="pay" data-id="${r.id}" style="padding:0;min-height:44px">${r.type === 'income' ? 'Received' : 'Mark paid'}</button>` : ''}
+      ${withAction && duePeriods(r) > 1 ? `<button class="link" data-act="pay-all" data-id="${r.id}" style="padding:0;min-height:44px">Catch up all (${duePeriods(r)})</button>` : ''}</span></div>`;
 };
 
 /* ---------- Home ---------- */
@@ -59,6 +61,7 @@ export function home() {
   const recent = sortedTx(s.transactions).slice(0, 5);
   const delta = prev.expense > 0 ? ((st.expense - prev.expense) / prev.expense) * 100 : null;
   const dRound = delta === null ? 0 : Math.round(delta);
+  const soon = billsDueSoon(3);
   const lastBackup = s.settings.lastBackup;
   const needsBackup = s.transactions.length >= 10 && (!lastBackup || (Date.now() - new Date(lastBackup + 'T00:00:00')) / 864e5 > 30);
 
@@ -91,6 +94,7 @@ export function home() {
     <div class="row" style="margin-top:18px"><button class="btn grow" data-act="add-tx" data-type="income">＋ Income</button><button class="btn grow" data-act="add-tx" data-type="expense">－ Expense</button></div>
     ${delta === null ? '' : `<p class="small muted" style="margin-top:16px">Spent ${money(st.expense)} so far. Last month’s total was ${money(prev.expense)} (${dRound === 0 ? 'about the same pace' : `<b class="${dRound > 0 ? 'neg' : 'pos'}">${dRound > 0 ? '+' : '−'}${Math.abs(dRound)}%</b> so far vs. that total`}).</p>`}
   </section>
+  ${soon.length ? `<a class="banner" href="#/bills"><span aria-hidden="true">⏰</span><span>${soon.slice(0, 2).map(({ r, diff }) => `<b>${esc(r.name)}</b> ${diff < 0 ? `overdue ${-diff}d` : diff === 0 ? 'due today' : `due in ${diff}d`}`).join(' · ')}${soon.length > 2 ? ` · +${soon.length - 2} more` : ''}</span></a>` : ''}
   ${needsBackup ? `<a class="banner" href="#/settings"><span aria-hidden="true">💾</span><span><b>Back up your data.</b> ${lastBackup ? `Last backup was on ${fmtDate(lastBackup)}.` : 'You haven’t made a backup yet.'} Everything lives only on this phone.</span></a>` : ''}
   ${hot.length ? `<div class="stack">${hot.slice(0, 2).map((r) => { const c = category(r.id); return `<a class="banner" href="#/budgets"><span aria-hidden="true">${r.pct >= 100 ? '🚨' : '⚠️'}</span><span><b>${esc(c?.name)}</b> is at ${Math.floor(r.pct)}% of ${money(r.limit)}</span></a>`; }).join('')}</div>` : ''}
   ${budgetCard}
@@ -187,7 +191,32 @@ export function bills() {
     ${inc.length ? `<section class="stack"><div class="section-head"><h2>Recurring income</h2></div><div class="list">${inc.map((r) => billRow(r, true)).join('')}</div></section>` : ''}`
     : empty('🗓️', 'No recurring items', 'Add rent, EMIs, subscriptions or your salary. Kharcha will remind you what’s due and set it aside in your budget.')}
   <button class="btn primary block" data-act="new-rec">+ Add recurring</button>
-  <p class="small muted" style="text-align:center">Tapping “Mark paid” records the transaction today and moves the due date to next month.</p>`;
+  <p class="small muted" style="text-align:center">“Mark paid” records one payment and moves to the next due date. If a bill has several missed months, “Catch up all” records each one on its own due date.</p>`;
+}
+
+/* ---------- Goals ---------- */
+export function goals() {
+  const s = get(), today = todayISO();
+  const total = s.goals.reduce((n, g) => n + goalSaved(g), 0);
+  const expenseAvg = [-1, -2, -3].map((d) => monthStats(shiftMonth(ym(today), d)).expense).reduce((a, b) => a + b, 0) / 3;
+  const cards = s.goals.map((g) => {
+    const saved = goalSaved(g), pct = Math.min(100, (saved / g.target) * 100), m = goalMonthly(g, today);
+    const note = m.status === 'done' ? 'Goal reached 🎉'
+      : m.status === 'late' ? `Deadline passed · ${money(m.left)} to go`
+      : m.perMonth === null ? `${money(m.left)} to go`
+      : `Save about ${money(Math.ceil(m.perMonth))} a month to finish by ${fmtDate(g.deadline)}`;
+    return `<button class="card tap" data-act="goal" data-id="${g.id}" style="display:flex;flex-direction:column;gap:14px;text-align:left;border:0;width:100%">
+      <span class="row"><span class="well sm" aria-hidden="true">${esc(g.icon)}</span><span class="grow"><h3>${esc(g.name)}</h3><span class="small muted" style="display:block">${money(saved)} of ${money(g.target)}</span></span><span class="pill ${m.status === 'done' ? 'ok' : ''}">${Math.floor(pct)}%</span></span>
+      ${progress(pct, m.status === 'done' ? 'teal' : '', `${g.name} progress`)}
+      <span class="small muted">${note}</span></button>`;
+  }).join('');
+  const tip = expenseAvg > 0 ? `Emergency funds usually cover 3 to 6 months of spending. Based on your last 3 months (about ${money(expenseAvg)} a month), 6 months is about ${money(expenseAvg * 6)}.` : 'Emergency funds usually cover 3 to 6 months of spending.';
+  return `<header class="page-head"><div class="row"><a class="icon-btn sm" href="#/more" aria-label="Back">‹</a><h1>Goals</h1></div><button class="icon-btn sm" data-act="new-goal" aria-label="New goal">+</button></header>
+  ${s.goals.length ? `<section class="card flat-inset row between"><span class="small muted">Saved across goals</span><b class="font-display num pos">${money(total)}</b></section>
+    <div class="stack">${cards}</div>
+    <button class="btn primary block" data-act="new-goal">+ New goal</button>`
+    : empty('🎯', 'Set your first goal', tip, '<button class="btn primary" data-act="new-goal">+ Create a goal</button>')}
+  ${s.goals.length ? `<p class="small muted" style="text-align:center">Goals are money you set aside. Adding money to a goal doesn’t change your account balances.</p>` : ''}`;
 }
 
 /* ---------- Reports ---------- */
@@ -248,6 +277,7 @@ export function more() {
   <div class="list">
     ${link('#/accounts', '🏦', 'Accounts', 'Cash, banks, cards, loans & net worth')}
     ${link('#/bills', '🗓️', 'Bills & EMIs', 'Recurring payments and salary')}
+    ${link('#/goals', '🎯', 'Savings goals', 'Emergency fund, trips, vehicle')}
     ${link('#/reports', '📈', 'Reports', 'Trends, categories and insights')}
     ${link('#/settings', '⚙️', 'Settings', 'App lock, backup, export')}
   </div>${installCard()}`;
@@ -262,6 +292,21 @@ function installCard() {
   return `<div class="card install-card"><span class="well">📲</span><span class="grow"><h3>Install the app</h3><p class="small muted">On Android open the browser menu <b>⋮</b> and choose <b>Install app</b>. On a computer use the install icon in the address bar.</p></span></div>`;
 }
 
+function reminderRow() {
+  const st = reminderStatus();
+  const isIPhone = /iphone|ipad/i.test(navigator.userAgent);
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  const sub = st === 'unsupported' ? 'Not supported in this browser'
+    : st === 'granted' ? 'On — you’ll get an alert when the app opens with bills due in 3 days'
+    : st === 'denied' ? 'Blocked — allow notifications for this site in browser settings'
+    : isIPhone && !standalone ? 'On iPhone, add Kharcha to your Home Screen first, then turn this on'
+    : 'Get an alert for bills due in the next 3 days';
+  const action = st === 'default' && !(isIPhone && !standalone)
+    ? '<button class="btn sm primary" data-act="remind-on">Turn on</button>'
+    : st === 'granted' ? '<span class="pill ok">On</span>' : '';
+  return `<div class="item" style="cursor:default"><span class="well sm" aria-hidden="true">🔔</span><span class="grow"><span class="title" style="display:block">Bill reminders</span><span class="meta" style="display:block;white-space:normal">${sub}</span></span>${action}</div>`;
+}
+
 export function settings() {
   const set = (act, icon, title, sub, extra = '') => `<button class="item ${extra}" data-act="${act}"><span class="well sm">${icon}</span><span class="grow"><span class="title" style="display:block">${title}</span><span class="meta" style="display:block">${sub}</span></span></button>`;
   const locked = isLockSet();
@@ -271,6 +316,7 @@ export function settings() {
     ${locked ? set('lock-off', '🔓', 'Turn off app lock', 'Remove the PIN') : ''}
   </div><p class="small muted" style="padding:0 4px">All data stays on this device. Nothing is sent to a server. The PIN is a casual lock that hides the app; it does not encrypt the stored data.</p></section>
   <section class="stack"><div class="section-head"><h2>Data</h2></div><div class="list">
+    ${reminderRow()}
     ${set('categories', '🏷️', 'Categories', 'Add or edit categories')}
     ${set('export-csv', '📄', 'Export CSV', 'All transactions, opens in Excel / Sheets')}
     ${set('backup', '💾', 'Back up data', get().settings.lastBackup ? `Last backup: ${fmtDate(get().settings.lastBackup)}` : 'Download a full JSON backup. Do this regularly.')}
@@ -281,5 +327,5 @@ export function settings() {
   <p class="small muted" style="text-align:center">Kharcha · works offline · ${get().transactions.length} transactions stored</p>`;
 }
 
-export const routes = { home, activity, budgets, accounts, bills, reports, more, settings };
-export const tabFor = { home: 'home', activity: 'activity', budgets: 'budgets', more: 'more', accounts: 'more', bills: 'more', reports: 'more', settings: 'more' };
+export const routes = { home, activity, budgets, accounts, bills, goals, reports, more, settings };
+export const tabFor = { home: 'home', activity: 'activity', budgets: 'budgets', more: 'more', accounts: 'more', bills: 'more', goals: 'more', reports: 'more', settings: 'more' };

@@ -28,3 +28,9 @@ The workflow stamps a fresh service-worker cache name on every deploy so install
 ## Adding income
 Home → **＋ Income**, or the **+** button → *Income* tab, or type `salary 85000` in Quick add.
 Recurring salary: More → Bills & EMIs → *Income* → **Received** each month.
+
+## Bills, reminders and goals
+- **Mark paid** records one payment on the bill's due date and moves to the next due date.
+- **Catch up all** records every missed month, each on its own due date, so each month's budget is right.
+- **Bill reminders** (Settings → Bill reminders): alerts for bills overdue or due within 3 days, shown when the app opens or comes back to the front. Alerts for a closed app need a server-sent push, which this offline-only app does not have. On iPhone, add the app to the Home Screen first.
+- **Savings goals** (More → Savings goals): earmarked money with a target, optional deadline and a monthly target. Goals don't move money between accounts.

@@ -1,7 +1,8 @@
 import { $, $$, todayISO, ym, shiftMonth, download, toast } from './util.js';
-import { get, subscribe, commit, replaceAll, resetAll, markPaid, category, acct, TX_TYPES, sanitize } from './store.js';
+import { get, subscribe, commit, replaceAll, resetAll, markPaid, category, acct, TX_TYPES, sanitize, deleteContribution } from './store.js';
+import { checkReminders, enableReminders } from './reminders.js';
 import { ui, routes, tabFor, activityList } from './views.js';
-import { closeSheet, sheetOpen, onPopState, txForm, accountForm, budgetForm, recurringForm, categoriesSheet, categoryForm, confirmSheet } from './forms.js';
+import { closeSheet, sheetOpen, onPopState, txForm, accountForm, budgetForm, recurringForm, categoriesSheet, categoryForm, confirmSheet, goalForm, goalDetail, contributionForm } from './forms.js';
 import { isLockSet, unlock, lockNow, createPin, removePin, checkPin, askPin } from './lock.js';
 
 const view = $('#view');
@@ -91,6 +92,17 @@ const actions = {
   'new-rec': () => recurringForm(),
   'edit-rec': (d) => recurringForm(d.id),
   pay: (d) => { markPaid(d.id); toast('Recorded ✓'); },
+  'pay-all': (d) => { const n = markPaid(d.id, { all: true }); toast(`Caught up ${n} payment${n > 1 ? 's' : ''} ✓`); },
+  'remind-on': async () => {
+    const r = await enableReminders();
+    toast(r === 'granted' ? 'Reminders on ✓' : r === 'denied' ? 'Notifications are blocked for this site' : 'Reminders not turned on');
+    render({ keepScroll: true });
+  },
+  'new-goal': () => goalForm(),
+  'edit-goal': (d) => goalForm(d.id),
+  goal: (d) => goalDetail(d.id),
+  'goal-add': (d) => contributionForm(d.id),
+  'goal-del-c': (d) => { deleteContribution(d.goal, d.id); goalDetail(d.goal); },
   'export-csv': exportCSV,
   backup,
   restore: () => $('#restore-file').click(),
@@ -135,6 +147,7 @@ document.addEventListener('visibilitychange', () => {
   }
   if (hiddenAt && Date.now() - hiddenAt > GRACE_MS) lockNow();
   root.classList.remove('privacy');
+  checkReminders();
 });
 
 /* ---------- PWA ---------- */
@@ -146,6 +159,8 @@ if ('serviceWorker' in navigator) {
   const hadController = !!navigator.serviceWorker.controller;
   window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('SW failed', e)));
   // A new version took over: reload into it unless the user is mid-entry.
+  // Tapping a bill reminder: the service worker asks an open window to go to that screen.
+  navigator.serviceWorker.addEventListener('message', (e) => { if (e.data?.type === 'go' && e.data.hash) location.hash = e.data.hash; });
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!hadController) return;   // first install, nothing to refresh
     if (sheetOpen() || !$('#lock').hidden) toast('Updated. Reopen the app to get the latest version.');
@@ -157,3 +172,4 @@ navigator.storage?.persist?.().catch(() => {});
 /* ---------- boot ---------- */
 if (isLockSet()) unlock();
 navigate();
+checkReminders();

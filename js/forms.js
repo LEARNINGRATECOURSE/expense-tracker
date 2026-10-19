@@ -1,7 +1,8 @@
-import { $, esc, money, todayISO, ym, toast } from './util.js';
+import { $, esc, money, fmtDate, todayISO, ym, toast } from './util.js';
 import {
   get, commit, acct, category, ACCOUNT_TYPES, TX_TYPES, addTransaction, updateTransaction, deleteTransaction,
   categorySpend, monthStats, crossed, firstDue, isLiability, balance, cleanIcon,
+  goalSaved, goalMonthly, addGoal, updateGoal, deleteGoal, addContribution, deleteContribution,
 } from './store.js';
 import { uid } from './util.js';
 
@@ -355,6 +356,89 @@ export function recurringForm(id) {
       if (ex) commit((x) => { const y = x.recurring.find((z) => z.id === id); Object.assign(y, next); if (oldDay !== day) y.nextDue = firstDue(day); });
       else commit((x) => x.recurring.push({ id: uid(), ...next, nextDue: firstDue(day) }));
       closeSheet(); toast('Saved ✓');
+    });
+  });
+}
+
+/* ---------- savings goals ---------- */
+const GOAL_TYPES = [['🛟', 'Emergency fund'], ['🏖️', 'Vacation'], ['🚗', 'Vehicle'], ['🏠', 'Home'], ['🎓', 'Education'], ['💍', 'Wedding'], ['🎯', 'Other']];
+
+export function goalForm(id) {
+  const ex = id && get().goals.find((g) => g.id === id);
+  const g = ex || { name: '', icon: '🛟', target: '', deadline: '' };
+  const html = `<form id="gf" class="stack" novalidate>
+    <div class="field"><span class="label">Type</span><div class="chips" role="radiogroup" aria-label="Goal type">${GOAL_TYPES.map(([ic, nm]) =>
+      `<label class="chip"><input type="radio" name="icon" value="${ic}" ${ic === g.icon ? 'checked' : ''}><span>${ic} ${nm}</span></label>`).join('')}</div></div>
+    <div class="field"><label for="gn">Name</label><input id="gn" name="name" class="input" value="${esc(g.name)}" maxlength="40" placeholder="e.g. Goa trip" required></div>
+    <div class="field"><label for="gt">Target (₹)</label><input id="gt" name="target" class="input" inputmode="decimal" value="${ex ? esc(g.target) : ''}" placeholder="0" required></div>
+    <div class="field"><label for="gd">Deadline (optional)</label><input id="gd" name="deadline" type="date" class="input" value="${esc(g.deadline || '')}" min="${todayISO()}"></div>
+    <p id="err" class="neg small" role="alert" hidden></p>
+    <div class="row actions">${ex ? '<button type="button" class="btn danger" id="del">Delete</button>' : ''}<button class="btn primary grow">${ex ? 'Save' : 'Create goal'}</button></div>
+  </form>`;
+  openSheet(ex ? 'Edit goal' : 'New goal', html, (p) => {
+    const fail = (m) => { const er = $('#err', p); er.textContent = m; er.hidden = false; };
+    $('#del', p)?.addEventListener('click', async () => {
+      if (await confirmSheet('Delete goal?', 'Its saved amounts are removed. Your account balances are not affected.')) { deleteGoal(id); closeSheet(); toast('Goal deleted'); }
+      else goalForm(id);
+    });
+    $('#gf', p).addEventListener('submit', (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      const target = num(d.target);
+      if (!d.name.trim()) return fail('Give the goal a name.');
+      if (!(target >= 1)) return fail('Enter a target of at least ₹1.');
+      if (d.deadline && d.deadline < todayISO()) return fail('Pick a deadline in the future, or leave it empty.');
+      const next = { name: d.name.trim(), icon: d.icon || '🎯', target, deadline: d.deadline || null };
+      if (ex) updateGoal(id, next); else addGoal(next);
+      closeSheet(); toast(ex ? 'Goal updated' : 'Goal created ✓');
+    });
+  });
+}
+
+export function goalDetail(id) {
+  const g = get().goals.find((x) => x.id === id);
+  if (!g) { toast('Goal not found'); return; }
+  const today = todayISO(), saved = goalSaved(g), pct = Math.min(100, (saved / g.target) * 100), m = goalMonthly(g, today);
+  const plan = m.status === 'done' ? '🎉 You reached this goal.'
+    : m.status === 'late' ? `The deadline (${fmtDate(g.deadline)}) has passed. ${money(m.left)} is still to go.`
+    : m.perMonth === null ? `${money(m.left)} to go. Add a deadline to see a monthly target.`
+    : `Save about ${money(Math.ceil(m.perMonth))} a month to reach it by ${fmtDate(g.deadline)}.`;
+  const history = [...g.contribs].sort((a, b) => b.date.localeCompare(a.date) || 0).map((c) => `
+    <div class="item" style="cursor:default">
+      <span class="grow"><span class="title" style="display:block">${esc(c.note || 'Added to goal')}</span><span class="meta" style="display:block">${fmtDate(c.date)}</span></span>
+      <span class="amt pos">+${money(c.amount)}</span>
+      <button class="icon-btn sm" data-act="goal-del-c" data-goal="${esc(g.id)}" data-id="${esc(c.id)}" aria-label="Remove ${money(c.amount)} from goal">✕</button></div>`).join('');
+  openSheet(`${g.icon} ${g.name}`, `
+    <div class="card flat-inset stack" style="padding:18px">
+      <div class="between row"><b class="font-display num">${money(saved)}</b><span class="muted small">of ${money(g.target)}</span></div>
+      <div class="track" role="progressbar" aria-label="Goal progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.floor(pct)}"><div class="fill ${m.status === 'done' ? 'teal' : ''}" style="width:${pct}%"></div></div>
+      <p class="small">${plan}</p>
+    </div>
+    <div class="row actions"><button class="btn primary grow" data-act="goal-add" data-id="${esc(g.id)}">＋ Add money</button><button class="btn" data-act="edit-goal" data-id="${esc(g.id)}">Edit</button></div>
+    <section class="stack"><h3>Money added</h3>${history || '<p class="muted small">Nothing added yet. Add money as you set it aside.</p>'}</section>`);
+}
+
+export function contributionForm(goalId) {
+  const g = get().goals.find((x) => x.id === goalId);
+  if (!g) return;
+  const html = `<form id="cf2" class="stack" novalidate>
+    <div class="field"><label for="ca">Amount (₹)</label><input id="ca" name="amount" class="input amount-input" inputmode="decimal" placeholder="0" required></div>
+    <div class="field"><label for="cd">Date</label><input id="cd" name="date" type="date" class="input" value="${todayISO()}" min="2000-01-01" max="${todayISO()}" required></div>
+    <div class="field"><label for="cn">Note (optional)</label><input id="cn" name="note" class="input" maxlength="80" placeholder="e.g. Diwali bonus" autocomplete="off"></div>
+    <p id="err" class="neg small" role="alert" hidden></p>
+    <button class="btn primary block">Add to ${esc(g.name)}</button>
+  </form>`;
+  openSheet('Add money to goal', html, (p) => {
+    $('#cf2', p).addEventListener('submit', (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      const amount = num(d.amount), er = $('#err', p);
+      const fail = (m) => { er.textContent = m; er.hidden = false; };
+      if (!(amount >= 0.01)) return fail('Enter an amount of at least ₹0.01.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date) || d.date > todayISO() || d.date < '2000-01-01') return fail('Pick a date between 2000 and today.');
+      addContribution(goalId, { amount, date: d.date, note: d.note.trim() });
+      goalDetail(goalId);
+      toast('Added to goal ✓');
     });
   });
 }

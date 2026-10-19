@@ -44,6 +44,7 @@ const fresh = () => ({
   transactions: [],
   budgets: { overall: 0, cats: {} },
   recurring: [],
+  goals: [],
   settings: { lock: null },
 });
 
@@ -140,13 +141,29 @@ export function sanitize(raw) {
     };
   }).filter(Boolean);
 
+  const goalIds = new Set();
+  const goals = arr(o.goals).map((g) => {
+    const id = safeId(g?.id);
+    const target = money2(g?.target);
+    if (!id || goalIds.has(id) || !(target >= 1 && target <= MAX_AMOUNT)) return null;
+    goalIds.add(id);
+    const cseen = new Set();
+    const contribs = arr(g.contribs).map((c) => {
+      const cid = safeId(c?.id), amount = money2(c?.amount);
+      if (!cid || cseen.has(cid) || !(amount >= 0.01 && amount <= MAX_AMOUNT) || !isDate(c.date)) return null;
+      cseen.add(cid);
+      return { id: cid, amount, date: c.date, note: text(c.note, 80) };
+    }).filter(Boolean);
+    return { id, name: text(g.name, 40) || 'Goal', icon: cleanIcon(g.icon, '🎯'), target, deadline: isDate(g.deadline) ? g.deadline : null, contribs };
+  }).filter(Boolean);
+
   const lock = o.settings?.lock;
   const settings = {
     lock: lock && typeof lock.salt === 'string' && typeof lock.hash === 'string' && /^[0-9a-f]{64}$/.test(lock.hash) ? { salt: lock.salt.slice(0, 64), hash: lock.hash } : null,
     lastAcc: accIds.has(o.settings?.lastAcc) ? o.settings.lastAcc : null,
     lastBackup: isDate(o.settings?.lastBackup) ? o.settings.lastBackup : null,
   };
-  return { v: 1, accounts, categories, transactions, budgets, recurring, settings };
+  return { v: 1, accounts, categories, transactions, budgets, recurring, goals, settings };
 }
 
 let saveFailed = false;
@@ -269,13 +286,62 @@ export function updateTransaction(id, patch) {
 export function deleteTransaction(id) {
   commit((s) => { s.transactions = s.transactions.filter((t) => t.id !== id); });
 }
-export function markPaid(id) {
-  const r = state.recurring.find((x) => x.id === id);
-  if (!r) return;
+const recordPayment = (r, date) => {
   const toAcc = r.type === 'expense' && r.toAccountId && acct(r.toAccountId);
   // An EMI / card bill that pays off a liability is a transfer, so the debt shrinks and it isn't counted twice.
   addTransaction(toAcc
-    ? { type: 'transfer', amount: r.amount, date: todayISO(), accountId: r.accountId, toAccountId: r.toAccountId, categoryId: null, note: r.name, recurringId: r.id }
-    : { type: r.type, amount: r.amount, date: todayISO(), accountId: r.accountId, categoryId: r.categoryId, note: r.name, recurringId: r.id });
-  commit((s) => { const x = s.recurring.find((y) => y.id === id); x.nextDue = nextDueAfter(x.nextDue, x.day); });
+    ? { type: 'transfer', amount: r.amount, date, accountId: r.accountId, toAccountId: r.toAccountId, categoryId: null, note: r.name, recurringId: r.id }
+    : { type: r.type, amount: r.amount, date, accountId: r.accountId, categoryId: r.categoryId, note: r.name, recurringId: r.id });
+};
+/** How many due dates are on or before today and still unpaid. */
+export function duePeriods(r, today = todayISO()) {
+  let n = 0, d = r.nextDue;
+  while (d <= today && n < 240) { n++; d = nextDueAfter(d, r.day); }
+  return n;
+}
+/** Records one payment for the oldest unpaid period, or every missed period when `all` is set.
+    A missed period is recorded on its own due date so it lands in the right month's budget. */
+export function markPaid(id, { all = false } = {}) {
+  const r = state.recurring.find((x) => x.id === id);
+  if (!r) return 0;
+  const today = todayISO();
+  const n = all ? Math.max(1, duePeriods(r, today)) : 1;
+  let due = r.nextDue;
+  for (let i = 0; i < n; i++) {
+    recordPayment(r, due < today ? due : today);
+    due = nextDueAfter(due, r.day);
+  }
+  commit((s) => { s.recurring.find((y) => y.id === id).nextDue = due; });
+  return n;
+}
+/** Active bills (expenses only) that are overdue or due within `days` days. */
+export function billsDueSoon(days = 3, today = todayISO()) {
+  return state.recurring
+    .filter((r) => r.type === 'expense' && r.active !== false)
+    .map((r) => ({ r, diff: Math.round((parseISO(r.nextDue) - parseISO(today)) / 864e5) }))
+    .filter((x) => x.diff <= days)
+    .sort((a, b) => a.diff - b.diff);
+}
+
+/* ---------- savings goals ----------
+   A goal is money earmarked for a purpose. It is NOT an account: adding money to a goal
+   doesn't move it out of any account, so balances and net worth are unchanged. */
+export const goalSaved = (g) => Math.round(g.contribs.reduce((n, c) => n + c.amount, 0) * 100) / 100;
+export function goalMonthly(g, today = todayISO()) {
+  const left = Math.max(0, Math.round((g.target - goalSaved(g)) * 100) / 100);
+  if (left === 0) return { left, perMonth: 0, status: 'done' };
+  if (!g.deadline) return { left, perMonth: null, status: 'open' };
+  if (g.deadline < today) return { left, perMonth: null, status: 'late' };
+  const [dy, dm] = g.deadline.split('-').map(Number), [ty, tm] = today.split('-').map(Number);
+  const months = Math.max(1, (dy - ty) * 12 + (dm - tm) + 1);   // this month counts as one
+  return { left, perMonth: left / months, status: 'open' };
+}
+export function addGoal(g) { commit((s) => s.goals.push({ id: uid(), contribs: [], ...g })); }
+export function updateGoal(id, patch) { commit((s) => Object.assign(s.goals.find((x) => x.id === id), patch)); }
+export function deleteGoal(id) { commit((s) => { s.goals = s.goals.filter((x) => x.id !== id); }); }
+export function addContribution(goalId, c) {
+  commit((s) => s.goals.find((x) => x.id === goalId).contribs.push({ id: uid(), ...c }));
+}
+export function deleteContribution(goalId, cid) {
+  commit((s) => { const g = s.goals.find((x) => x.id === goalId); if (g) g.contribs = g.contribs.filter((c) => c.id !== cid); });
 }

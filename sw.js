@@ -65,3 +65,15 @@ self.addEventListener('fetch', (e) => {
     }
   })());
 });
+
+/* Tapping a bill reminder opens the app on the Bills screen. */
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const hash = e.notification.data?.hash || '';
+  e.waitUntil((async () => {
+    const wins = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const open = wins.find((w) => w.url.startsWith(self.registration.scope));
+    if (open) { await open.focus(); return open.postMessage({ type: 'go', hash }); }
+    return clients.openWindow(new URL('./' + hash, self.registration.scope).href);
+  })());
+});
