@@ -53,6 +53,7 @@ export function home() {
   const s = get(), k = curMonth(), st = monthStats(k), prev = monthStats(shiftMonth(k, -1)), tot = totals();
   const bs = budgetStatus(k);
   const now = new Date(), daysLeft = daysInMonth(k) - now.getDate() + 1;
+  const daysElapsed = now.getDate(), spentPerDay = st.expense / daysElapsed;
   const hot = bs.rows.filter((r) => r.pct >= 80).sort((a, b) => b.pct - a.pct);
   const recs = [...s.recurring].filter((r) => r.active !== false).sort((a, b) => a.nextDue.localeCompare(b.nextDue)).slice(0, 3);
   const recent = sortedTx(s.transactions).slice(0, 5);
@@ -70,7 +71,8 @@ export function home() {
       ${progress(bs.overall.pct, '', 'Monthly budget used')}
       <div class="between row small"><span class="muted">${money(bs.overall.spent)} of ${money(bs.overall.limit)}</span>
         <span class="${free < 0 ? 'neg' : ''}" style="font-weight:700">${bs.overall.spent > bs.overall.limit ? `${money(bs.overall.spent - bs.overall.limit)} over` : free < 0 ? `${money(-free)} short after bills` : `${money(free)} left`}</span></div>
-      <p class="small muted">${free > 0 ? `≈ <b style="color:var(--fg)">${money(free / daysLeft)}/day</b> safe to spend for the next ${daysLeft} day${daysLeft > 1 ? 's' : ''}${pending ? `, after ${money(pending)} of bills due` : ''}.` : bs.overall.spent > bs.overall.limit ? 'You have used up this month’s budget.' : `${money(pending)} of bills are still due this month, which is more than the ${money(bs.overall.limit - bs.overall.spent)} left in your budget.`}</p></a>`;
+      <p class="small muted">${free > 0 ? `≈ <b style="color:var(--fg)">${money(free / daysLeft)}/day</b> safe to spend for the next ${daysLeft} day${daysLeft > 1 ? 's' : ''}${pending ? `, after ${money(pending)} of bills due` : ''}.` : bs.overall.spent > bs.overall.limit ? 'You have used up this month’s budget.' : `${money(pending)} of bills are still due this month, which is more than the ${money(bs.overall.limit - bs.overall.spent)} left in your budget.`}</p>
+      <p class="small muted">Spent so far: <b style="color:var(--fg)">${money(spentPerDay)}/day</b> on average since the 1st (${money(st.expense)} over ${daysElapsed} day${daysElapsed > 1 ? 's' : ''}).</p></a>`;
   } else {
     budgetCard = `<a class="card tap row" href="#/budgets"><span class="well">🎯</span><span class="grow"><h3>Set a monthly budget</h3><p class="small muted">Know how much you can safely spend each day.</p></span><span aria-hidden="true">›</span></a>`;
   }
