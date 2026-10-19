@@ -20,18 +20,28 @@ export async function checkPin(pin) {
 }
 
 let open = false;
-export const isLocked = () => open;
+let mode = null;        // 'unlock' while the mandatory lock pad is up
+let cancelCurrent = null;
+export const isLocked = () => open && mode === 'unlock';
+
+const root = document.documentElement;
+const setInert = (on) => {
+  $('#app').inert = on || !$('#sheet').hidden;
+  $('#sheet').inert = on;
+};
 
 /** Full-screen PIN pad. Resolves with the PIN once `validate` accepts it, or null if cancelled. */
-export function askPin({ title, sub = '', cancelable = false, validate = async () => true }) {
+export function askPin({ title, sub = '', cancelable = false, validate = async () => true, lockMode = false }) {
   const el = $('#lock');
   open = true;
+  mode = lockMode ? 'unlock' : 'ask';
   el.hidden = false;
+  setInert(true);
   let pin = '', busy = false;
   el.innerHTML = `
     <div class="lock-box" role="dialog" aria-modal="true" aria-label="${title}">
       <div class="well float" style="width:72px;height:72px;font-size:2rem;border-radius:24px" aria-hidden="true">🔒</div>
-      <div><h1 class="font-display" style="font-size:1.5rem">${title}</h1><p class="muted small" id="lk-sub" style="margin-top:6px">${sub}</p></div>
+      <div><h1 class="font-display" style="font-size:1.5rem">${title}</h1><p class="muted small" id="lk-sub" role="status" style="margin-top:6px">${sub}</p></div>
       <div class="dots" id="lk-dots" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
       <div class="keypad">
         ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button class="btn" data-k="${n}" aria-label="${n}">${n}</button>`).join('')}
@@ -41,9 +51,18 @@ export function askPin({ title, sub = '', cancelable = false, validate = async (
       </div>
     </div>`;
   const dots = $('#lk-dots', el);
+  const subEl = $('#lk-sub', el);
   const paint = () => [...dots.children].forEach((d, i) => d.classList.toggle('on', i < pin.length));
   return new Promise((resolve) => {
-    const done = (v) => { document.removeEventListener('keydown', onKey); open = false; el.hidden = true; el.innerHTML = ''; resolve(v); };
+    const done = (v) => {
+      document.removeEventListener('keydown', onKey);
+      open = false; mode = null; cancelCurrent = null;
+      el.hidden = true; el.innerHTML = ''; el.onclick = null;
+      root.classList.remove('locked');
+      setInert(false);
+      resolve(v);
+    };
+    cancelCurrent = () => done(null);
     const press = async (k) => {
       if (busy) return;
       if (k === 'x') return cancelable && done(null);
@@ -53,6 +72,7 @@ export function askPin({ title, sub = '', cancelable = false, validate = async (
       if (pin.length === 4) {
         busy = true;
         if (await validate(pin)) return done(pin);
+        subEl.textContent = 'That PIN didn’t match. Try again.';
         dots.classList.add('shake');
         navigator.vibrate?.(80);
         setTimeout(() => { dots.classList.remove('shake'); pin = ''; paint(); busy = false; }, 400);
@@ -65,11 +85,18 @@ export function askPin({ title, sub = '', cancelable = false, validate = async (
     };
     document.addEventListener('keydown', onKey);
     el.onclick = (e) => { const b = e.target.closest('[data-k]'); if (b) press(b.dataset.k); };
-    el.querySelector('[data-k="1"]')?.focus({ preventScroll: true });
+    requestAnimationFrame(() => el.querySelector('[data-k="1"]')?.focus({ preventScroll: true }));
   });
 }
 
-export const unlock = () => askPin({ title: 'Kharcha is locked', sub: 'Enter your 4-digit PIN', validate: checkPin });
+export const unlock = () => askPin({ title: 'Kharcha is locked', sub: 'Enter your 4-digit PIN', validate: checkPin, lockMode: true });
+
+/** Always (re-)lock: also dismisses any cancelable PIN pad, so cancelling it cannot reveal the app. */
+export function lockNow() {
+  if (!isLockSet() || isLocked()) return;
+  if (open) cancelCurrent?.();
+  return unlock();
+}
 
 /** Set (or change) the PIN: enter twice. Returns true on success. */
 export async function createPin() {

@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main, dl/gracious-hawking-e1ao8l]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -27,6 +27,9 @@ jobs:
         run: |
           mkdir _site
           cp -r index.html sw.js manifest.webmanifest css js icons _site/
+          # New cache name per deploy so installed apps pick up the update
+          sed -i "s/^const VERSION = .*/const VERSION = 'kharcha-${GITHUB_SHA::7}';/" _site/sw.js
+          grep -n "^const VERSION" _site/sw.js
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
